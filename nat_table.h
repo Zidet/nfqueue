@@ -23,3 +23,4 @@ nat_t *create_table();      //create a new translation entry
 nat_e *searchSource(nat_e **table, unsigned long addr, unsigned short port);
 nat_e *searchDest(nat_e **table, unsigned short port);
 nat_e *insert(nat_e **table, unsigned long addr, unsigned short port);
+void drop(nat_e **table, unsigned short port);
