@@ -49,3 +49,8 @@ nat_e *insert(nat_e **table, unsigned long addr, unsigned short port){
   // }
     return ne_l;
 }
+void drop(nat_e **table, unsigned short port){
+    nat_e *ne_l = table[port-10000];
+    table[port-10000]=NULL;
+    free(ne_l);
+}
