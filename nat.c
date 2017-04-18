@@ -34,7 +34,44 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
   s_Ip=ntohl(ip->saddr);
   d_Ip=ntohl(ip->daddr);
 
-  s_port=nto
+  s_Port=ntohs(tcp->source);
+  d_Port=ntohs(tcp->dest);
+
+  if(s_Ip&&subnetMask)==subnetIP){
+    //outbound part
+  }else{
+    //inbound part
+    nat_e entry;
+    // int i;
+    // for (i=0; i<2001; i++){
+    //   if(table[i]==NULL){
+    //     break;
+    //   }
+    //   else if(table[i].i_port==d_Port){
+    //     entry=table[i];
+    //     break;
+    //   }
+    // }
+    entry=searchDest(table, d_Port);
+    if(entry==NULL){
+        puts("no Match!");
+        return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+    }
+    else{
+        puts("Match!");
+        ip->daddr=htonl(entry.i_addr);
+        tcp->dest=htons(entry.i_port);
+    }
+    // reset checksum
+		ip->check = 0;
+		tcp->check = 0;
+
+		// calculate new checksum
+		tcp->check = tcp_checksum((unsigned char *) ip);
+		ip->check = ip_checksum((unsigned char *) ip);
+
+		return nfq_set_verdict(qh, id, NF_ACCEPT, payload_len, loadedData);
+  }
 }
 
 int Callback(struct nfq_q_handle *qh, struct nfgenmsg *msg, struct nfq_data *pkt, void *data){
