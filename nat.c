@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include<limits.h>
+#include <limits.h>
 
 // network include
 #include <linux/netfilter.h>  // for NF_ACCEPT
@@ -27,6 +27,8 @@ uint32_t subnetIP;
 unsigned int mask = 0xFFFFFFFF; //255
 int packet_num = 0;
 
+nat_e **table;
+
 int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned char *loadedData){
   unsigned long s_IP, d_IP; //s_Ip: source ip d_Ip: destination ip
   unsigned short s_Port, d_Port, transport; //s_port: source port d_port: dest port
@@ -37,8 +39,115 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
   s_Port=ntohs(tcp->source);
   d_Port=ntohs(tcp->dest);
 
-  if(s_Ip&&subnetMask)==subnetIP){
-    //outbound part
+  if(s_Ip & subnetMask==subnetIP){
+    // outbound part
+    printf("Outbound Packet\n");
+
+    // search the entry in the nat table
+    nat_e *entry;
+    entry = searchSource(table, s_Ip, s_Port);
+
+    if(entry == NULL){
+
+      printf("Entry not found\n");
+      if(tcp->syn == 1){
+        printf("Syn Packet\n");
+        // insert new entry into the nat table
+        ;
+
+        if((entry = insert(table, s_Ip, s_Port)) == NULL){
+          fprintf(stderr, "Error: No empty entry in the NAT table\n");
+          return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
+        }
+
+        transport = entry->t_port;
+      }
+      else{
+        printf("Not Syn Packet\n");
+        // drop the packet
+        return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); //  is drop necessary?
+      }
+    }
+    else{
+
+      printf("Entry found\n");
+
+      transport = entry->t_port;
+
+      if(tcp->rst == 1){
+        printf("RST Packet\n");
+        // delete the entry
+        drop(table, transport);
+        entry = NULL;
+      }
+
+      else{
+        // initiate a 4-way handshake
+        if(entry->tcp_state == ACTIVE && tcp->fin == 1){
+          printf("4-way handshake initiated: FIN1 sent\n");
+          entry->tcp_state = FIN1_SENT;
+        }
+
+        // 4-way handshake initiated by the other side, expect to send an ACK or ACK+FIN2 packet
+        else if(entry->tcp_state == FIN1_RECEIVED){
+          if(tcp->ack != 1){
+            fprintf(stderr, "Error: 4-way handshake error, expect to send an ACK/ACK-FIN packet\n");
+            return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
+          }
+          else{
+            printf("4-way handshake in progress: ACK1 sent\n");
+            entry->tcp_state = ACK1_SENT;
+            if(tcp->fin == 1){
+              printf("4-way handshake in progress: FIN2 sent\n");
+              entry->tcp_state = FIN2_SENT;
+            }
+          }
+        }
+
+        // 4-way handshake initiated by the other side, expect to send an FIN2 packet
+        else if(entry->tcp_state == ACK1_SENT){
+          if(tcp->fin != 1){
+            fprintf(stderr, "Error: 4-way handshake error, expect to send a FIN packet\n");
+            return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
+          }
+          else{
+            printf("4-way handshake in progress: FIN2 sent\n");
+            entry->tcp_state = FIN2_SENT;
+          }
+        }
+
+        // 4-way handshake initiated by this side, expect to send an ACK2 packet, and close the connection
+        else if(entry->tcp_state == FIN2_RECEIVED){
+          if(tcp->ack != 1){
+            fprintf(stderr, "Error: 4-way handshake error, expect to send an ACK packet\n");
+            return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
+          }
+          else{
+            printf("4-way handshake ends: ACK2 SENT\n");
+            drop(table, transport);
+            entry = NULL;
+          }
+        }
+      }
+
+      // translate the source address
+      ip->saddr = htonl(publicIP);
+      tcp->source = htons(transport);
+
+      // reset checksum
+      ip->check = 0;
+      tcp->check = 0;
+
+      // calculate new checksum
+      tcp->check = tcp_checksum((unsigned char *) ip); // correct?
+      ip->check = ip_checksum((unsigned char *) ip);
+
+      return nfq_set_verdict(qh, id, NF_ACCEPT, payload_len, loadedData);
+
+    }
+      
+        
+        
   }else{
     //inbound part
     nat_e entry;
@@ -67,7 +176,7 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
 		tcp->check = 0;
 
 		// calculate new checksum
-		tcp->check = tcp_checksum((unsigned char *) ip);
+		tcp->check = tcp_checksum((unsigned char *) ip); // correct?
 		ip->check = ip_checksum((unsigned char *) ip);
 
 		return nfq_set_verdict(qh, id, NF_ACCEPT, payload_len, loadedData);
@@ -102,6 +211,8 @@ int main(int argc, char ** argv){
     printf("Usage: ./nat <public ip> <internal ip> <subnet mask>\n");
     exit(0);
   }
+
+  table = create_table();
 
   // pre-processing
   inet_aton(argv[1],inp);
