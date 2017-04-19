@@ -177,39 +177,39 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
           // initiate a 4-way handshake
           if(entry->tcp_state == ACTIVE && tcp->fin == 1){
             printf("4-way handshake initiated: FIN1 sent\n");
-            entry->tcp_state = FIN1_SENT;
+            entry->tcp_state = FIN1_RECEIVED;
           }
 
           // 4-way handshake initiated by the other side, expect to send an ACK or ACK+FIN2 packet
-          else if(entry->tcp_state == FIN1_RECEIVED){
+          else if(entry->tcp_state == FIN1_SENT){
             if(tcp->ack != 1){
               fprintf(stderr, "Error: 4-way handshake error, expect to send an ACK/ACK-FIN packet\n");
               return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
             }
             else{
               printf("4-way handshake in progress: ACK1 sent\n");
-              entry->tcp_state = ACK1_SENT;
+              entry->tcp_state = ACK1_RECEIVED;
               if(tcp->fin == 1){
                 printf("4-way handshake in progress: FIN2 sent\n");
-                entry->tcp_state = FIN2_SENT;
+                entry->tcp_state = FIN2_RECEIVED;
               }
             }
           }
 
           // 4-way handshake initiated by the other side, expect to send an FIN2 packet
-          else if(entry->tcp_state == ACK1_SENT){
+          else if(entry->tcp_state == ACK1_RECEIVED){
             if(tcp->fin != 1){
               fprintf(stderr, "Error: 4-way handshake error, expect to send a FIN packet\n");
               return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
             }
             else{
               printf("4-way handshake in progress: FIN2 sent\n");
-              entry->tcp_state = FIN2_SENT;
+              entry->tcp_state = FIN2_RECEIVED;
             }
           }
 
           // 4-way handshake initiated by this side, expect to send an ACK2 packet, and close the connection
-          else if(entry->tcp_state == FIN2_RECEIVED){
+          else if(entry->tcp_state == FIN2_SENT){
             if(tcp->ack != 1){
               fprintf(stderr, "Error: 4-way handshake error, expect to send an ACK packet\n");
               return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
