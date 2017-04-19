@@ -29,12 +29,17 @@ nat_e *insert(nat_e **table, unsigned long addr, unsigned short port){
     nat_e *ne_l = (nat_e*)malloc(sizeof(nat_e));
     ne_l->i_addr=addr;
     ne_l->i_port=port;
-    ne->tcp_state="ACTIVE";
+    ne->tcp_state= ACTIVE;
     int i = 0;
     while(1){
       if (tabile->entry_list[i]==NULL) break;
       i++;
     }
+
+    // return null if there is no empty entry to be inserted
+    if(i == 2001)
+      return NULL;
+
     int tp=i+10000;
     ne_l->t_port=tp;
     table[i]=ne_l;
