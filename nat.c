@@ -53,8 +53,6 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
       if(tcp->syn == 1){
         printf("Syn Packet\n");
         // insert new entry into the nat table
-        ;
-
         if((entry = insert(table, s_Ip, s_Port)) == NULL){
           fprintf(stderr, "Error: No empty entry in the NAT table\n");
           return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
@@ -145,9 +143,9 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
       return nfq_set_verdict(qh, id, NF_ACCEPT, payload_len, loadedData);
 
     }
-      
-        
-        
+
+
+
   }else{
     //inbound part
     nat_e entry;
@@ -170,7 +168,59 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
         puts("Match!");
         ip->daddr=htonl(entry.i_addr);
         tcp->dest=htons(entry.i_port);
-    }
+        if (tcp->rst == 1){
+          printf("RST PACKET");
+          drop(table, transport);
+          entry = NULL;
+        }
+        else{
+          // initiate a 4-way handshake
+          if(entry->tcp_state == ACTIVE && tcp->fin == 1){
+            printf("4-way handshake initiated: FIN1 sent\n");
+            entry->tcp_state = FIN1_SENT;
+          }
+
+          // 4-way handshake initiated by the other side, expect to send an ACK or ACK+FIN2 packet
+          else if(entry->tcp_state == FIN1_RECEIVED){
+            if(tcp->ack != 1){
+              fprintf(stderr, "Error: 4-way handshake error, expect to send an ACK/ACK-FIN packet\n");
+              return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
+            }
+            else{
+              printf("4-way handshake in progress: ACK1 sent\n");
+              entry->tcp_state = ACK1_SENT;
+              if(tcp->fin == 1){
+                printf("4-way handshake in progress: FIN2 sent\n");
+                entry->tcp_state = FIN2_SENT;
+              }
+            }
+          }
+
+          // 4-way handshake initiated by the other side, expect to send an FIN2 packet
+          else if(entry->tcp_state == ACK1_SENT){
+            if(tcp->fin != 1){
+              fprintf(stderr, "Error: 4-way handshake error, expect to send a FIN packet\n");
+              return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
+            }
+            else{
+              printf("4-way handshake in progress: FIN2 sent\n");
+              entry->tcp_state = FIN2_SENT;
+            }
+          }
+
+          // 4-way handshake initiated by this side, expect to send an ACK2 packet, and close the connection
+          else if(entry->tcp_state == FIN2_RECEIVED){
+            if(tcp->ack != 1){
+              fprintf(stderr, "Error: 4-way handshake error, expect to send an ACK packet\n");
+              return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
+            }
+            else{
+              printf("4-way handshake ends: ACK2 SENT\n");
+              drop(table, transport);
+              entry = NULL;
+            }
+          }
+        }
     // reset checksum
 		ip->check = 0;
 		tcp->check = 0;
@@ -180,6 +230,7 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
 		ip->check = ip_checksum((unsigned char *) ip);
 
 		return nfq_set_verdict(qh, id, NF_ACCEPT, payload_len, loadedData);
+  }
   }
 }
 
