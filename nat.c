@@ -4,13 +4,18 @@
 #include <string.h>
 #include <time.h>
 #include <limits.h>
+#include <unistd.h>
 
 // network include
+#include <netinet/in.h>
 #include <linux/netfilter.h>  // for NF_ACCEPT
 #include <linux/types.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <libnetfilter_queue/libnetfilter_queue.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 // local include
 #include "nat_table.h"
@@ -18,7 +23,6 @@
 
 struct iphdr *ip;
 struct tcphdr *tcp;
-nfqnl_msg_packet_hdr *ph;
 
 uint32_t publicIP;
 uint32_t lanIP;
@@ -30,22 +34,27 @@ int packet_num = 0;
 nat_e **table;
 
 int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned char *loadedData){
-  unsigned long s_IP, d_IP; //s_Ip: source ip d_Ip: destination ip
-  unsigned short s_Port, d_Port, transport; //s_port: source port d_port: dest port
+  uint32_t s_IP, d_IP; //s_Ip: source ip d_Ip: destination ip
+  unsigned s_Port, d_Port, transport; //s_port: source port d_port: dest port
+  //int isOutbound = 0;
 
-  s_Ip=ntohl(ip->saddr);
-  d_Ip=ntohl(ip->daddr);
+  s_IP=ntohl(ip->saddr); 
+  d_IP=ntohl(ip->daddr);
 
   s_Port=ntohs(tcp->source);
   d_Port=ntohs(tcp->dest);
-
-  if(s_Ip & subnetMask==subnetIP){
+  //printf("Mask Result: %d\n", s_IP&subnetMask);
+  //printf("SubnetIP: %d\n", subnetIP); 
+  //printf("OUTBOUND : %d\n", s_IP&subnetMask - subnetIP);
+  //isOutbound = (s_IP&subnetMask - subnetIP == 0)? 0:1;
+  //printf("ISOUTBOUND : %d\n",isOutbound);
+  if((s_IP & subnetMask) == subnetIP){
     // outbound part
     printf("Outbound Packet\n");
 
     // search the entry in the nat table
     nat_e *entry;
-    entry = searchSource(table, s_Ip, s_Port);
+    entry = searchSource(table, s_IP, s_Port);
 
     if(entry == NULL){
 
@@ -53,7 +62,7 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
       if(tcp->syn == 1){
         printf("Syn Packet\n");
         // insert new entry into the nat table
-        if((entry = insert(table, s_Ip, s_Port)) == NULL){
+        if((entry = insert(table, s_IP, s_Port)) == NULL){
           fprintf(stderr, "Error: No empty entry in the NAT table\n");
           return nfq_set_verdict(qh, id, NF_DROP, 0, NULL); // is drop necessary?
         }
@@ -145,10 +154,10 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
     }
 
 
-
   }else{
+    printf("Inbound Packet\n");
     //inbound part
-    nat_e entry;
+    nat_e *entry;
     // int i;
     // for (i=0; i<2001; i++){
     //   if(table[i]==NULL){
@@ -166,8 +175,8 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
     }
     else{
         puts("Match!");
-        ip->daddr=htonl(entry.i_addr);
-        tcp->dest=htons(entry.i_port);
+        ip->daddr=htonl(entry->i_addr);
+        tcp->dest=htons(entry->i_port);
         if (tcp->rst == 1){
           printf("RST PACKET");
           drop(table, transport);
@@ -235,27 +244,28 @@ int TCPHandler(struct nfq_q_handle *qh,u_int32_t id,int payload_len,unsigned cha
 }
 
 int Callback(struct nfq_q_handle *qh, struct nfgenmsg *msg, struct nfq_data *pkt, void *data){
-  ph = nfq_get_msg_packet_hdr(nfa);
+  struct nfqnl_msg_packet_hdr *ph = nfq_get_msg_packet_hdr(pkt);
   unsigned long id=ntohl(ph->packet_id);
-  unsigned char *loadedData;
-  unsigned int data_length=nfq_get_payload(nfa, &loadedData);
+  char *loadedData;
+  unsigned int data_len=nfq_get_payload(pkt, &loadedData);
   ip=(struct iphdr*) loadedData;
   if(ip->protocol==IPPROTO_TCP){
     tcp = (struct tcphdr *)(loadedData + (ip->ihl<<2));
-    TCPHandler(qh,id,payload_len, loadedData);
+    TCPHandler(qh,id,data_len, loadedData);
   }
   else{
-    print("received unTCP packet");
+    printf("received unTCP packet");
     return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
   }
-
+}
 int main(int argc, char ** argv){
   struct nfq_handle *h;
   struct nfq_q_handle *qh;
   struct nfnl_handle *nh;
   int fd,len;
   char buf[4096];
-  struct in_addr* inp = (in_addr*)malloc(sizeof(in_addr));
+  //struct in_addr* inp = (in_addr*)malloc(sizeof(in_addr));
+  struct in_addr inp;
   int mask_int;
 
   if(argc!=4){
@@ -266,13 +276,16 @@ int main(int argc, char ** argv){
   table = create_table();
 
   // pre-processing
-  inet_aton(argv[1],inp);
-  publicIP = ntohl(inp->s_addr); // publicIP
-  inet_aton(argv[2],inp);
-  lanIP = ntohl(inp->s_addr);    // lanIP
+  inet_aton(argv[1],&inp);
+  publicIP = ntohl(inp.s_addr); // publicIP
+  inet_aton(argv[2],&inp);
+  lanIP = ntohl(inp.s_addr);    // lanIP
   mask_int = atoi(argv[3]);
   subnetMask  = mask << (32-mask_int);
   subnetIP = lanIP & subnetMask;       // local_network(localIP);
+  char* subnetIPStr = inet_ntoa(inp);
+  printf("subnetIP: %s\n", subnetIPStr);
+
 
   // Open library handle
   if(!(h = nfq_open())){

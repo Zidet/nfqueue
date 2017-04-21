@@ -3,7 +3,7 @@
 #include "nat_table.h"
 
 nat_e **create_table(){
-    entry_list=(nat_e*)malloc(sizeof(nat_e*)*2001);
+    nat_e** entry_list=(nat_e**)malloc(sizeof(nat_e*)*2001);
     return entry_list;
 }
 
@@ -29,10 +29,10 @@ nat_e *insert(nat_e **table, unsigned long addr, unsigned short port){
     nat_e *ne_l = (nat_e*)malloc(sizeof(nat_e));
     ne_l->i_addr=addr;
     ne_l->i_port=port;
-    ne->tcp_state= ACTIVE;
+    ne_l->tcp_state= 0;
     int i = 0;
     while(1){
-      if (tabile->entry_list[i]==NULL) break;
+      if (table[i]==NULL) break;
       i++;
     }
 
